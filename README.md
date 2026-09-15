@@ -49,7 +49,7 @@ The Web Worker updates membrane voltage, synaptic state, refractory state, and t
 1. Virtual odor, sugar contact, touch, and looming signals enter annotated FlyWire sensory populations as Poisson input.
 2. The whole-brain LIF network propagates activity through signed FlyWire v783 connectivity.
 3. The simulator reads DNg97/DNp09, DNa01/DNa02, MDN, DNg62, DNp01, and MN9-related outputs.
-4. These outputs drive FlyGym 2.1 CPG and recorded stepping trajectories while MuJoCo integrates a 48-actuator body.
+4. These outputs drive a 12 Hz tripod CPG, recorded FlyGym 2.1 stepping trajectories, and phase-matched foot adhesion while MuJoCo integrates a 48-actuator body. Descending commands are smoothed before they reach the gait controller.
 5. The new position and contacts generate the next sensory input.
 
 ## Fidelity boundary
@@ -60,13 +60,16 @@ This research prototype genuinely integrates the full listed connectivity graph,
 
 ```bash
 node tests/brain-core.test.mjs
+node tests/locomotion-controller.test.mjs
 python3 tools/verify_assets.py
 ```
 
-With the Python MuJoCo package installed, the second test can also compile the XML and integrate 100 physics steps:
+With the Python MuJoCo package installed, the asset test can also compile the XML and integrate 100 physics steps:
 
 ```bash
 python3 tools/verify_assets.py --physics
 ```
 
 Rebuilding the graph requires NumPy, pandas, PyArrow, and the upstream Eon/FlyWire files. See [PROVENANCE.md](PROVENANCE.md) for data sources and licenses.
+
+See [ROADMAP.md](ROADMAP.md) for the prioritized path from this interactive prototype toward a more experimentally useful embodied connectome platform.

@@ -6,8 +6,11 @@ import {
   buildMeshes,
   syncMeshes,
 } from "./shared/scene.js";
+import {
+  LocomotionController,
+  mixDescendingCommands,
+} from "./locomotion-controller.mjs";
 
-const TAU = Math.PI * 2;
 const DATA_URL = new URL("./data/", import.meta.url);
 const ASSETS_URL = "./assets";
 const number = new Intl.NumberFormat("en-US");
@@ -100,126 +103,6 @@ function startBrainWorker() {
     onFrame(handler) { frameHandler = handler; },
     fail(error) { rejectReady?.(error); },
   };
-}
-
-class Controller {
-  constructor(meta) {
-    this.dt = meta.timestep;
-    this.legs = meta.control.leg_order;
-    this.cmap = meta.ctrl_index_by_leg_dof;
-    this.adh = meta.adhesion;
-    this.tripodMap = meta.control.tripod_map;
-    const cpg = meta.control.cpg;
-    this.freqs0 = cpg.intrinsic_freqs.slice();
-    this.W = cpg.coupling_weights;
-    this.PB = cpg.phase_biases;
-    this.conv = cpg.convergence_coefs;
-    this.phaseInc = (this.dt / meta.control.leg_step_time) * TAU;
-    const pp = meta.preprogrammed;
-    this.N = pp.n_samples;
-    this.tab = this.legs.map((leg) => pp.legs[leg]);
-    this._cpgAmps = new Float64Array(6);
-    this._cpgFreqs = new Float64Array(6);
-    this._d6 = new Float64Array(6);
-    this._a7 = new Float64Array(7);
-    this._groomActions = new Float64Array(6);
-    this.reset();
-  }
-
-  reset() {
-    this.phases = new Float64Array(6).map(() => Math.random() * TAU);
-    this.mags = new Float64Array(6);
-    this.legPhases = new Float64Array(6);
-    this.stepDir = new Float64Array(6);
-    this.tripodPhases = new Float64Array(2);
-    this.tripodDir = new Float64Array(2);
-  }
-
-  _anglesInto(legIndex, phase, magnitude, output) {
-    const table = this.tab[legIndex];
-    let x = ((phase % TAU) + TAU) % TAU / TAU * this.N;
-    const i0 = Math.floor(x) % this.N;
-    const i1 = (i0 + 1) % this.N;
-    const fraction = x - Math.floor(x);
-    const a0 = table.angles[i0];
-    const a1 = table.angles[i1];
-    for (let dof = 0; dof < 7; dof++) {
-      const sample = a0[dof] * (1 - fraction) + a1[dof] * fraction;
-      output[dof] = table.neutral[dof] + magnitude * (sample - table.neutral[dof]);
-    }
-  }
-
-  _adhesionOn(legIndex, phase) {
-    const [start, end] = this.tab[legIndex].swing;
-    const wrapped = ((phase % TAU) + TAU) % TAU;
-    return !(wrapped > start && wrapped < end);
-  }
-
-  _writeLeg(ctrl, legIndex, phase, magnitude) {
-    this._anglesInto(legIndex, phase, magnitude, this._a7);
-    const row = this.cmap[legIndex];
-    for (let dof = 0; dof < 7; dof++) ctrl[row[dof]] = this._a7[dof];
-    ctrl[this.adh[legIndex]] = this._adhesionOn(legIndex, phase) ? 1 : 0;
-  }
-
-  stepCPG(ctrl, gainLeft, gainRight) {
-    const amps = this._cpgAmps;
-    const freqs = this._cpgFreqs;
-    const ampLeft = Math.abs(gainLeft);
-    const ampRight = Math.abs(gainRight);
-    amps[0] = amps[1] = amps[2] = ampLeft;
-    amps[3] = amps[4] = amps[5] = ampRight;
-    const signLeft = gainLeft >= 0 ? 1 : -1;
-    const signRight = gainRight >= 0 ? 1 : -1;
-    for (let i = 0; i < 6; i++) freqs[i] = this.freqs0[i] * (i < 3 ? signLeft : signRight);
-
-    const phases = this.phases;
-    const magnitudes = this.mags;
-    for (let i = 0; i < 6; i++) {
-      let coupling = 0;
-      for (let j = 0; j < 6; j++) {
-        coupling += magnitudes[j] * this.W[i][j]
-          * Math.sin(phases[j] - phases[i] - this.PB[i][j]);
-      }
-      this._d6[i] = TAU * freqs[i] + coupling;
-    }
-    for (let i = 0; i < 6; i++) {
-      phases[i] += this._d6[i] * this.dt;
-      magnitudes[i] += this.conv[i] * (amps[i] - magnitudes[i]) * this.dt;
-      this._writeLeg(ctrl, i, phases[i], magnitudes[i]);
-    }
-  }
-
-  _advance(phaseArray, directionArray, index, action) {
-    if (phaseArray[index] >= TAU || (phaseArray[index] <= 0 && directionArray[index] < 0)) {
-      phaseArray[index] = 0;
-      directionArray[index] = 0;
-    } else if (phaseArray[index] <= 0) {
-      if (action > 0) {
-        phaseArray[index] += this.phaseInc;
-        directionArray[index] = 1;
-      } else if (action < 0) {
-        phaseArray[index] = TAU - this.phaseInc;
-        directionArray[index] = -1;
-      }
-    } else {
-      phaseArray[index] += this.phaseInc * directionArray[index];
-    }
-  }
-
-  stepSingle(ctrl, actions) {
-    for (let i = 0; i < 6; i++) {
-      this._advance(this.legPhases, this.stepDir, i, actions[i]);
-      this._writeLeg(ctrl, i, this.legPhases[i], 1);
-    }
-  }
-
-  stepGroom(ctrl, simTime) {
-    this._groomActions.fill(0);
-    const phase = Math.floor(simTime * 8) % 2;
-    this._groomActions[phase ? 0 : 3] = 1;
-    this.stepSingle(ctrl, this._groomActions);
-  }
 }
 
 class BrainRenderer {
@@ -485,6 +368,12 @@ class WorldRenderer {
     this.scene.fog = new THREE.Fog(0x171c1c, 35, 100);
     this.camera = new THREE.PerspectiveCamera(46, 1, 0.04, 240);
     this.camera.up.set(0, 0, 1);
+    this.cameraTarget = new THREE.Vector3();
+    this.desiredCameraPosition = new THREE.Vector3();
+    this.desiredCameraTarget = new THREE.Vector3();
+    this.cameraYaw = 0;
+    this.cameraInitialized = false;
+    this.lastCameraMode = this.cameraMode;
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
@@ -618,30 +507,58 @@ class WorldRenderer {
     };
   }
 
-  updateCamera() {
-    const pose = this.pose();
-    if (this.cameraMode === "top") {
-      this.camera.position.set(pose.x, pose.y - 0.01, 23);
-      this.camera.up.set(0, 1, 0);
-      this.camera.lookAt(pose.x, pose.y, 0);
-      return;
-    }
-    this.camera.up.set(0, 0, 1);
-    this.camera.position.set(
-      pose.x - Math.cos(pose.yaw) * 8,
-      pose.y - Math.sin(pose.yaw) * 8,
-      5.2,
-    );
-    this.camera.lookAt(
-      pose.x + Math.cos(pose.yaw) * 2.1,
-      pose.y + Math.sin(pose.yaw) * 2.1,
-      0.65,
-    );
+  snapCamera() {
+    this.cameraInitialized = false;
   }
 
-  render() {
+  updateCamera(frameDt = 1 / 60) {
+    const pose = this.pose();
+    const modeChanged = this.cameraMode !== this.lastCameraMode;
+    const teleported = this.camera.position.distanceToSquared(
+      this.desiredCameraPosition,
+    ) > 30 * 30;
+    const snap = !this.cameraInitialized || modeChanged || teleported;
+    const yawAlpha = snap ? 1 : 1 - Math.exp(-frameDt / 0.18);
+    const yawDelta = Math.atan2(
+      Math.sin(pose.yaw - this.cameraYaw),
+      Math.cos(pose.yaw - this.cameraYaw),
+    );
+    this.cameraYaw += yawDelta * yawAlpha;
+
+    if (this.cameraMode === "top") {
+      this.desiredCameraPosition.set(pose.x, pose.y - 0.01, 23);
+      this.desiredCameraTarget.set(pose.x, pose.y, 0);
+      this.camera.up.set(0, 1, 0);
+    } else {
+      const narrowness = clamp((1.05 - this.camera.aspect) / 0.35, 0, 1);
+      const followDistance = 8 + narrowness * 1.5;
+      const followHeight = 5.2 + narrowness * 0.8;
+      const lookAhead = 2.1 - narrowness * 1.3;
+      this.camera.up.set(0, 0, 1);
+      this.desiredCameraPosition.set(
+        pose.x - Math.cos(this.cameraYaw) * followDistance,
+        pose.y - Math.sin(this.cameraYaw) * followDistance,
+        followHeight,
+      );
+      this.desiredCameraTarget.set(
+        pose.x + Math.cos(this.cameraYaw) * lookAhead,
+        pose.y + Math.sin(this.cameraYaw) * lookAhead,
+        0.65,
+      );
+    }
+
+    const positionAlpha = snap ? 1 : 1 - Math.exp(-frameDt / 0.11);
+    const targetAlpha = snap ? 1 : 1 - Math.exp(-frameDt / 0.08);
+    this.camera.position.lerp(this.desiredCameraPosition, positionAlpha);
+    this.cameraTarget.lerp(this.desiredCameraTarget, targetAlpha);
+    this.camera.lookAt(this.cameraTarget);
+    this.cameraInitialized = true;
+    this.lastCameraMode = this.cameraMode;
+  }
+
+  render(frameDt) {
     syncMeshes(this.meshGroup, this.data);
-    this.updateCamera();
+    this.updateCamera(frameDt);
     this.renderer.render(this.scene, this.camera);
   }
 }
@@ -663,7 +580,7 @@ class EmbodiedFlyLab {
       brainData.displayEdges,
       brainData.manifest,
     );
-    this.controller = new Controller(body.meta);
+    this.controller = new LocomotionController(body.meta);
     this.physicsStepper = makeStepper(body.meta.timestep, 90);
     this.statsMeter = makeStatsMeter(body.meta.timestep, ({ rtf }) => {
       byId("metric-ratio").textContent = `${rtf.toFixed(2)}x`;
@@ -677,6 +594,7 @@ class EmbodiedFlyLab {
     this.dust = 0.08;
     this.loomTimer = 0;
     this.simTime = 0;
+    this.bodySettleRemaining = 0;
     this.brainAccumulatorMs = 0;
     this.brainBusy = false;
     this.requestId = 0;
@@ -723,7 +641,10 @@ class EmbodiedFlyLab {
   resetBody() {
     this.mj.mj_resetDataKeyframe(this.model, this.data, 0);
     this.controller.reset();
+    this.controller.holdNeutral(this.data.ctrl);
+    this.bodySettleRemaining = 0.06;
     this.mj.mj_forward(this.model, this.data);
+    this.world.snapCamera();
   }
 
   reset() {
@@ -795,14 +716,19 @@ class EmbodiedFlyLab {
     let base = this.motor.forward - this.motor.reverse;
     let turn = this.motor.turn;
     if (this.motor.escape > 0.2 || this.loomTimer > 0.15) base = Math.max(base, 1.2);
-    if (this.sensors.contact && this.motor.feed > 0.18) base = 0;
+    if (this.sensors.contact && this.motor.feed > 0.18) {
+      base = 0;
+      turn = 0;
+    }
 
-    if (this.motor.groom > 0.22 && this.dust > 0.25) {
+    if (this.bodySettleRemaining > 0) {
+      this.controller.holdNeutral(this.data.ctrl);
+      this.bodySettleRemaining = Math.max(0, this.bodySettleRemaining - this.bodyMeta.timestep);
+    } else if (this.motor.groom > 0.22 && this.dust > 0.25) {
       this.controller.stepGroom(this.data.ctrl, this.simTime);
     } else {
-      const gainLeft = clamp(base + turn, -1.2, 1.2);
-      const gainRight = clamp(base - turn, -1.2, 1.2);
-      this.controller.stepCPG(this.data.ctrl, gainLeft, gainRight);
+      const gait = mixDescendingCommands(base, turn);
+      this.controller.stepCPG(this.data.ctrl, gait.left, gait.right);
     }
     this.mj.mj_step(this.model, this.data);
     this.simTime += this.bodyMeta.timestep;
@@ -894,7 +820,7 @@ class EmbodiedFlyLab {
       this.updateInternalState(simulatedSeconds);
       this.requestBrainStep();
     }
-    this.world.render();
+    this.world.render(wallDt);
     this.brain.render();
     this.updateWorldHud();
     this.statsMeter(now, physicsSteps);
