@@ -21,7 +21,7 @@ The launcher prints and opens a `http://127.0.0.1:.../` URL. Opening `index.html
 - `Pause`: pauses biological time for both the brain and body.
 - `Add food`: places another odor source in front of the fly.
 - `Touch`: stimulates Johnston's-organ-related sensory populations.
-- `Threat`: stimulates looming-sensitive visual populations.
+- `Threat`: stimulates looming-sensitive visual populations and triggers a retreat-turn-sprint ground escape.
 - `Reset`: resets the body, internal state, LIF voltages, and synaptic state.
 - `Settings`: adjusts physics playback speed and exploration drive.
 - Drag or scroll over the brain: rotates or zooms the connectome.
@@ -49,12 +49,12 @@ The Web Worker updates membrane voltage, synaptic state, refractory state, and t
 1. Virtual odor, sugar contact, touch, and looming signals enter annotated FlyWire sensory populations as Poisson input.
 2. The whole-brain LIF network propagates activity through signed FlyWire v783 connectivity.
 3. The simulator reads DNg97/DNp09, DNa01/DNa02, MDN, DNg62, DNp01, and MN9-related outputs.
-4. These outputs drive a 12 Hz tripod CPG, recorded FlyGym 2.1 stepping trajectories, and phase-matched foot adhesion while MuJoCo integrates a 48-actuator body. Descending commands are smoothed before they reach the gait controller.
+4. These outputs drive a 12 Hz tripod CPG, recorded FlyGym 2.1 stepping trajectories, and phase-matched foot adhesion while MuJoCo integrates a 48-actuator body. Descending commands are smoothed before they reach the gait controller; an escape output selects a short ground-escape motor sequence.
 5. The new position and contacts generate the next sensory input.
 
 ## Fidelity boundary
 
-This research prototype genuinely integrates the full listed connectivity graph, but it is not a biologically validated complete digital fruit fly. The visual scene uses a looming-population proxy rather than a photoreceptor-level visual model. Sensor intensity and descending-neuron-to-CPG transforms are designed interfaces. Grooming uses an approximate front-leg trajectory. The project is therefore suited to closed-loop whole-brain/body exploration, not validated prediction of spontaneous biological behavior.
+This research prototype genuinely integrates the full listed connectivity graph, but it is not a biologically validated complete digital fruit fly. The visual scene uses a looming-population proxy rather than a photoreceptor-level visual model. Sensor intensity and descending-neuron-to-CPG transforms are designed interfaces. The bundled body has no actuated wing joints, so the escape behavior is explicitly presented as a ground retreat, turn, and sprint rather than a biological takeoff. Grooming uses an approximate front-leg trajectory. The project is therefore suited to closed-loop whole-brain/body exploration, not validated prediction of spontaneous biological behavior.
 
 ## Verification
 

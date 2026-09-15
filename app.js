@@ -7,12 +7,15 @@ import {
   syncMeshes,
 } from "./shared/scene.js";
 import {
+  GROUND_ESCAPE_DURATION_SECONDS,
   LocomotionController,
+  groundEscapeCommand,
   mixDescendingCommands,
 } from "./locomotion-controller.mjs";
 
 const DATA_URL = new URL("./data/", import.meta.url);
 const ASSETS_URL = "./assets";
+const LOOM_STIMULUS_DURATION_SECONDS = 0.55;
 const number = new Intl.NumberFormat("en-US");
 const byId = (id) => document.getElementById(id);
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
@@ -473,27 +476,48 @@ class WorldRenderer {
   createLoomObject() {
     this.loomObject = new THREE.Mesh(
       new THREE.SphereGeometry(1.1, 20, 12),
-      new THREE.MeshStandardMaterial({ color: 0x2b3030, roughness: 0.9 }),
+      new THREE.MeshStandardMaterial({
+        color: 0x843f3b,
+        emissive: 0x28100f,
+        roughness: 0.86,
+      }),
     );
+    this.loomObject.castShadow = true;
     this.loomObject.visible = false;
     this.scene.add(this.loomObject);
+    this.loomPath = null;
+  }
+
+  startLoom(durationSeconds, side = 1) {
+    const pose = this.pose();
+    const direction = pose.yaw + (side >= 0 ? 0.3 : -0.3);
+    const dx = Math.cos(direction);
+    const dy = Math.sin(direction);
+    this.loomPath = {
+      duration: durationSeconds,
+      start: new THREE.Vector3(pose.x + dx * 11, pose.y + dy * 11, 5),
+      end: new THREE.Vector3(pose.x + dx * 2.8, pose.y + dy * 2.8, 1.7),
+    };
+    this.loomObject.position.copy(this.loomPath.start);
+    this.loomObject.scale.setScalar(0.55);
+    this.loomObject.visible = true;
+  }
+
+  cancelLoom() {
+    this.loomPath = null;
+    this.loomObject.visible = false;
   }
 
   updateLoom(timer) {
-    if (timer <= 0) {
-      this.loomObject.visible = false;
+    if (timer <= 0 || !this.loomPath) {
+      this.cancelLoom();
       return;
     }
-    const pose = this.pose();
     this.loomObject.visible = true;
-    const progress = 1 - timer / 0.8;
-    const distance = 11 - progress * 8;
-    this.loomObject.position.set(
-      pose.x + Math.cos(pose.yaw) * distance,
-      pose.y + Math.sin(pose.yaw) * distance,
-      5 - progress * 2,
-    );
-    this.loomObject.scale.setScalar(0.6 + progress * 2.2);
+    const linearProgress = clamp(1 - timer / this.loomPath.duration, 0, 1);
+    const progress = linearProgress * linearProgress * (3 - 2 * linearProgress);
+    this.loomObject.position.lerpVectors(this.loomPath.start, this.loomPath.end, progress);
+    this.loomObject.scale.setScalar(0.55 + progress * 1.35);
   }
 
   pose() {
@@ -593,6 +617,11 @@ class EmbodiedFlyLab {
     this.hunger = 0.72;
     this.dust = 0.08;
     this.loomTimer = 0;
+    this.escapeTimer = 0;
+    this.escapeArmed = false;
+    this.escapeTurnSign = 1;
+    this.nextThreatSide = 1;
+    this.escapePhase = "idle";
     this.simTime = 0;
     this.bodySettleRemaining = 0;
     this.brainAccumulatorMs = 0;
@@ -613,7 +642,7 @@ class EmbodiedFlyLab {
     });
     byId("food-button").addEventListener("click", () => this.world.addFoodAhead());
     byId("dust-button").addEventListener("click", () => { this.dust = 1; });
-    byId("loom-button").addEventListener("click", () => { this.loomTimer = 0.8; });
+    byId("loom-button").addEventListener("click", () => this.triggerThreat());
     byId("reset-button").addEventListener("click", () => this.reset());
     byId("settings-button").addEventListener("click", () => {
       const panel = byId("settings");
@@ -638,6 +667,17 @@ class EmbodiedFlyLab {
     });
   }
 
+  triggerThreat() {
+    const side = this.nextThreatSide;
+    this.nextThreatSide *= -1;
+    this.escapeTurnSign = side;
+    this.escapePhase = "retreat";
+    this.escapeTimer = 0;
+    this.escapeArmed = true;
+    this.loomTimer = LOOM_STIMULUS_DURATION_SECONDS;
+    this.world.startLoom(LOOM_STIMULUS_DURATION_SECONDS, side);
+  }
+
   resetBody() {
     this.mj.mj_resetDataKeyframe(this.model, this.data, 0);
     this.controller.reset();
@@ -652,6 +692,12 @@ class EmbodiedFlyLab {
     this.hunger = 0.72;
     this.dust = 0.08;
     this.loomTimer = 0;
+    this.escapeTimer = 0;
+    this.escapeArmed = false;
+    this.escapeTurnSign = 1;
+    this.nextThreatSide = 1;
+    this.escapePhase = "idle";
+    this.world.cancelLoom();
     this.simTime = 0;
     this.brainAccumulatorMs = 0;
     this.ignoreFramesThrough = this.requestId;
@@ -702,6 +748,8 @@ class EmbodiedFlyLab {
     this.hunger = clamp(this.hunger + dt * 0.0025, 0, 1);
     this.dust = clamp(this.dust + dt * 0.0015, 0, 1);
     this.loomTimer = Math.max(0, this.loomTimer - dt);
+    this.escapeTimer = Math.max(0, this.escapeTimer - dt);
+    if (this.loomTimer === 0 && this.escapeTimer === 0) this.escapeArmed = false;
     this.world.updateLoom(this.loomTimer);
     if (this.sensors.contact && this.motor.feed > 0.18 && this.nearestFood) {
       this.hunger = clamp(this.hunger - dt * 0.24, 0, 1);
@@ -715,8 +763,12 @@ class EmbodiedFlyLab {
   physicsStep() {
     let base = this.motor.forward - this.motor.reverse;
     let turn = this.motor.turn;
-    if (this.motor.escape > 0.2 || this.loomTimer > 0.15) base = Math.max(base, 1.2);
-    if (this.sensors.contact && this.motor.feed > 0.18) {
+    const escapeCommand = this.escapeTimer > 0
+      ? groundEscapeCommand(this.escapeTimer, this.escapeTurnSign)
+      : null;
+    this.escapePhase = escapeCommand?.phase || "idle";
+
+    if (!escapeCommand && this.sensors.contact && this.motor.feed > 0.18) {
       base = 0;
       turn = 0;
     }
@@ -724,6 +776,13 @@ class EmbodiedFlyLab {
     if (this.bodySettleRemaining > 0) {
       this.controller.holdNeutral(this.data.ctrl);
       this.bodySettleRemaining = Math.max(0, this.bodySettleRemaining - this.bodyMeta.timestep);
+    } else if (escapeCommand) {
+      this.controller.stepCPG(
+        this.data.ctrl,
+        escapeCommand.left,
+        escapeCommand.right,
+        escapeCommand,
+      );
     } else if (this.motor.groom > 0.22 && this.dust > 0.25) {
       this.controller.stepGroom(this.data.ctrl, this.simTime);
     } else {
@@ -764,6 +823,10 @@ class EmbodiedFlyLab {
     if (frame.requestId <= this.ignoreFramesThrough) return;
     this.brainBusy = false;
     this.motor = frame.motor;
+    if (this.escapeArmed && this.motor.escape > 0.2) {
+      this.escapeTimer = GROUND_ESCAPE_DURATION_SECONDS;
+      this.escapeArmed = false;
+    }
     this.brain.updateActivity(frame.spikeIndices, frame.spikeCounts, frame.groupRates, frame.simulatedMs);
     byId("metric-brain-time").textContent = `${(frame.brainTimeMs / 1000).toFixed(2)} s`;
     byId("metric-compute").textContent = `${frame.computeMs.toFixed(0)} ms`;
@@ -776,6 +839,7 @@ class EmbodiedFlyLab {
       turn: this.motor.turn,
       feed: this.motor.feed,
       groom: this.motor.groom,
+      escape: this.motor.escape,
     };
     for (const [name, value] of Object.entries(values)) {
       byId(`motor-${name}`).textContent = value.toFixed(2);
@@ -794,7 +858,10 @@ class EmbodiedFlyLab {
       byId(`${name}-meter`).style.width = `${value * 100}%`;
     }
     let behavior = "Sensor integration";
-    if (this.motor.escape > 0.2 || this.loomTimer > 0.1) behavior = "Escape";
+    if (this.escapeTimer > 0) {
+      const phaseLabels = { retreat: "retreat", turn: "turning", sprint: "sprint" };
+      behavior = `Ground escape: ${phaseLabels[this.escapePhase] || "sprint"}`;
+    } else if (this.loomTimer > 0.1) behavior = "Threat detected";
     else if (this.motor.groom > 0.22 && this.dust > 0.25) behavior = "Antennal grooming";
     else if (sugar && this.motor.feed > 0.18) behavior = "Feeding";
     else if (this.motor.forward > 0.08) behavior = "Food seeking";

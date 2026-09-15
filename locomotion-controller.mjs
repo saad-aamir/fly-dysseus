@@ -2,6 +2,7 @@ const TAU = Math.PI * 2;
 
 export const DEFAULT_WALK_FREQUENCY_HZ = 12;
 export const MAX_GAIT_AMPLITUDE = 1;
+export const GROUND_ESCAPE_DURATION_SECONDS = 0.95;
 
 const COMMAND_TIME_CONSTANT_SECONDS = 0.075;
 const COMMAND_DEAD_ZONE = 0.04;
@@ -38,6 +39,41 @@ export function mixDescendingCommands(base, turn) {
   return {
     left: clamp(left, -MAX_GAIT_AMPLITUDE, MAX_GAIT_AMPLITUDE),
     right: clamp(right, -MAX_GAIT_AMPLITUDE, MAX_GAIT_AMPLITUDE),
+  };
+}
+
+export function groundEscapeCommand(remainingSeconds, turnSign = 1) {
+  const elapsed = GROUND_ESCAPE_DURATION_SECONDS - clamp(
+    remainingSeconds,
+    0,
+    GROUND_ESCAPE_DURATION_SECONDS,
+  );
+  const direction = turnSign >= 0 ? 1 : -1;
+
+  if (elapsed < 0.16) {
+    return {
+      left: -0.86,
+      right: -0.86,
+      frequencyScale: 1.15,
+      responsiveness: 2.6,
+      phase: "retreat",
+    };
+  }
+  if (elapsed < 0.43) {
+    return {
+      left: direction * 0.94,
+      right: -direction * 0.94,
+      frequencyScale: 1.15,
+      responsiveness: 2.6,
+      phase: "turn",
+    };
+  }
+  return {
+    left: 1,
+    right: 1,
+    frequencyScale: 1.25,
+    responsiveness: 2,
+    phase: "sprint",
   };
 }
 
@@ -115,15 +151,17 @@ export class LocomotionController {
     for (let i = 0; i < 6; i++) this._writeLeg(ctrl, i, this.phases[i], 0, true);
   }
 
-  _smoothGain(index, target) {
-    const alpha = 1 - Math.exp(-this.dt / this.commandTau);
+  _smoothGain(index, target, responsiveness = 1) {
+    const alpha = 1 - Math.exp(-this.dt * responsiveness / this.commandTau);
     this.smoothedGains[index] += alpha * (target - this.smoothedGains[index]);
     return this.smoothedGains[index];
   }
 
-  stepCPG(ctrl, targetLeft, targetRight) {
-    const gainLeft = this._smoothGain(0, clamp(targetLeft, -1, 1));
-    const gainRight = this._smoothGain(1, clamp(targetRight, -1, 1));
+  stepCPG(ctrl, targetLeft, targetRight, options = {}) {
+    const responsiveness = clamp(options.responsiveness ?? 1, 0.5, 4);
+    const frequencyScale = clamp(options.frequencyScale ?? 1, 0.5, 1.35);
+    const gainLeft = this._smoothGain(0, clamp(targetLeft, -1, 1), responsiveness);
+    const gainRight = this._smoothGain(1, clamp(targetRight, -1, 1), responsiveness);
     const amps = this._cpgAmps;
     const freqs = this._cpgFreqs;
     const ampLeft = Math.abs(gainLeft);
@@ -132,7 +170,9 @@ export class LocomotionController {
     amps[3] = amps[4] = amps[5] = ampRight;
     const signLeft = gainLeft >= 0 ? 1 : -1;
     const signRight = gainRight >= 0 ? 1 : -1;
-    for (let i = 0; i < 6; i++) freqs[i] = this.freqs0[i] * (i < 3 ? signLeft : signRight);
+    for (let i = 0; i < 6; i++) {
+      freqs[i] = this.freqs0[i] * frequencyScale * (i < 3 ? signLeft : signRight);
+    }
 
     const phases = this.phases;
     const magnitudes = this.mags;

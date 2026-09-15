@@ -7,6 +7,7 @@ The current release is an interactive research prototype, not a biologically val
 - Simulates all 138,639 listed neurons and 15,091,983 weighted FlyWire v783 edges in a Web Worker.
 - Couples connectome output to a FlyGym 2.1 body running in MuJoCo WASM.
 - Uses a deterministic 12 Hz tripod CPG with recorded joint trajectories, phase-matched adhesion, smoothed commands, and a neutral-pose reset warmup.
+- Routes looming-proxy activity through a DNp01/giant-fiber readout into an explicit ground-escape fallback for the non-wing-actuated body.
 - Displays the position and recent firing state of every neuron alongside the embodied world.
 
 ## Next priorities
@@ -39,7 +40,7 @@ Add deterministic seeds, scenario files, event recording, replay, and export of 
 
 - Move graph integration toward WebGPU or partitioned workers and stream compressed graph chunks to reduce startup and brain-step latency.
 - Add configurable neuron and synapse models without changing the environment/controller interface.
-- Implement dedicated feeding, grooming, escape, flight, and terrain controllers as separable behavioral modules.
+- Implement validated feeding, grooming, takeoff, flight, and terrain controllers as separable behavioral modules.
 - Add experiment comparison views, spike raster inspection, neuron selection, and downloadable analysis bundles.
 - Support multiple flies only after single-fly sensorimotor validation and performance targets are met.
 
