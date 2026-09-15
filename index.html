@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Embodied Fly Lab</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d1011;
+      --panel: #15191a;
+      --panel-2: #1b2021;
+      --line: #303738;
+      --ink: #edf2ef;
+      --muted: #9ca8a3;
+      --green: #62c48d;
+      --yellow: #e8bd57;
+      --red: #e1695e;
+      --blue: #66a7cb;
+      --cyan: #6fc9c0;
+      --control: #252b2c;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink); }
+    button, input { font: inherit; }
+    button { color: inherit; }
+
+    .app-shell {
+      height: 100dvh;
+      min-height: 620px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .topbar {
+      min-height: 62px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #111516;
+    }
+
+    .brand { min-width: 174px; }
+    .brand h1 { margin: 0; font-size: 17px; font-weight: 500; letter-spacing: 0; }
+    .brand p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+
+    .system-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 148px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--yellow); flex: 0 0 auto; }
+    .status-dot.ready { background: var(--green); }
+    .status-dot.error { background: var(--red); }
+
+    .metrics {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      margin-right: auto;
+      min-width: 0;
+    }
+
+    .metric { min-width: 68px; }
+    .metric strong { display: block; font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; }
+    .metric span { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
+
+    .toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; justify-content: flex-end; }
+    .btn {
+      flex: 0 0 auto;
+      min-height: 34px;
+      padding: 7px 9px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--control);
+      cursor: pointer;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .btn:hover { border-color: #596364; background: #2c3334; }
+    .btn.primary { background: var(--ink); color: #111516; border-color: var(--ink); font-weight: 500; }
+    .btn[aria-pressed="true"] { border-color: var(--green); color: var(--green); }
+
+    .split-view {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(500px, 1.45fr) minmax(400px, 1fr);
+    }
+
+    .world-panel, .brain-panel { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+    .world-panel { border-right: 1px solid var(--line); background: #171c1c; }
+    #world-stage, #brain-stage { position: absolute; inset: 0; }
+    #world-stage canvas, #brain-stage canvas { display: block; width: 100%; height: 100%; }
+
+    .panel-heading {
+      position: absolute;
+      z-index: 5;
+      top: 12px;
+      left: 12px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      pointer-events: none;
+    }
+    .panel-heading h2 { margin: 0; font-size: 12px; font-weight: 500; letter-spacing: 0; }
+    .mode-label { color: var(--muted); font-size: 10px; }
+
+    .camera-control {
+      position: absolute;
+      z-index: 6;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+      background: rgba(17, 21, 22, .86);
+    }
+    .camera-control button {
+      height: 30px;
+      padding: 0 10px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .camera-control button:last-child { border-right: 0; }
+    .camera-control button[aria-pressed="true"] { color: var(--ink); background: var(--control); }
+
+    .world-readout {
+      position: absolute;
+      z-index: 5;
+      left: 12px;
+      bottom: 12px;
+      width: min(420px, calc(100% - 24px));
+      padding: 10px 12px;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 6px;
+      background: rgba(15, 18, 19, .84);
+      backdrop-filter: blur(8px);
+    }
+
+    .behavior-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .behavior-row strong { font-size: 14px; font-weight: 500; }
+    .behavior-row span { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+    .sensors { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 9px; }
+    .sensor label { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }
+    .meter { height: 4px; margin-top: 5px; background: #303536; overflow: hidden; }
+    .meter span { display: block; width: 0; height: 100%; background: var(--green); transition: width .12s linear; }
+    .sensor:nth-child(2) .meter span { background: var(--yellow); }
+    .sensor:nth-child(3) .meter span { background: var(--blue); }
+
+    .brain-panel { display: grid; grid-template-rows: minmax(340px, 1fr) 170px; background: #111516; }
+    .brain-view { position: relative; min-height: 0; border-bottom: 1px solid var(--line); }
+    .brain-stats {
+      position: absolute;
+      z-index: 5;
+      right: 12px;
+      top: 12px;
+      text-align: right;
+      color: var(--muted);
+      font-size: 10px;
+      font-variant-numeric: tabular-nums;
+      pointer-events: none;
+    }
+    .brain-stats strong { display: block; color: var(--ink); font-size: 13px; font-weight: 500; }
+    .brain-stats span { display: block; }
+    .brain-stats .active-focus { margin-top: 4px; color: var(--yellow); }
+
+    .brain-mode-control {
+      position: absolute;
+      z-index: 6;
+      top: 70px;
+      right: 10px;
+      display: flex;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: hidden;
+      background: rgba(17, 21, 22, .88);
+    }
+    .brain-mode-control button {
+      height: 28px;
+      padding: 0 9px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 10px;
+    }
+    .brain-mode-control button:last-child { border-right: 0; }
+    .brain-mode-control button[aria-pressed="true"] { color: #111516; background: var(--yellow); }
+
+    .legend {
+      position: absolute;
+      z-index: 5;
+      left: 12px;
+      bottom: 11px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      max-width: calc(100% - 24px);
+      color: var(--muted);
+      font-size: 9px;
+      pointer-events: none;
+    }
+    .legend span { display: inline-flex; align-items: center; gap: 4px; }
+    .swatch { width: 7px; height: 7px; border-radius: 50%; }
+    .swatch.firing { box-shadow: 0 0 7px #ffd65e; }
+
+    .activity-panel { display: grid; grid-template-columns: minmax(0, 1fr) 150px; min-height: 0; }
+    .raster-wrap { position: relative; min-width: 0; padding: 12px; }
+    .raster-wrap h3, .motor-readout h3 { margin: 0 0 8px; color: var(--muted); font-size: 10px; font-weight: 500; }
+    #activity-raster { display: block; width: 100%; height: 118px; background: #0d1011; }
+    .motor-readout { padding: 12px; border-left: 1px solid var(--line); }
+    .motor-line { margin-bottom: 8px; }
+    .motor-line label { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); }
+    .motor-line output { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+    .loading {
+      position: absolute;
+      z-index: 20;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(13, 16, 17, .94);
+    }
+    .loading[hidden] { display: none; }
+    .loading-box { width: min(420px, calc(100% - 40px)); }
+    .loading-box strong { display: block; font-size: 14px; font-weight: 500; }
+    .loading-box p { margin: 7px 0 12px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+    .loading-track { height: 3px; background: var(--line); overflow: hidden; }
+    .loading-track span { display: block; width: 35%; height: 100%; background: var(--yellow); animation: loading 1.2s ease-in-out infinite alternate; }
+    @keyframes loading { from { transform: translateX(-100%); } to { transform: translateX(285%); } }
+
+    .settings {
+      position: absolute;
+      z-index: 7;
+      top: 52px;
+      right: 10px;
+      width: 210px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #171c1d;
+      box-shadow: 0 12px 30px rgba(0,0,0,.35);
+    }
+    .settings[hidden] { display: none; }
+    .setting { margin-bottom: 12px; }
+    .setting:last-child { margin-bottom: 0; }
+    .setting label { display: flex; justify-content: space-between; margin-bottom: 5px; color: var(--muted); font-size: 10px; }
+    .setting input { width: 100%; accent-color: var(--green); }
+
+    @media (max-width: 1180px) {
+      .topbar { align-items: flex-start; flex-wrap: wrap; }
+      .brand { margin-right: auto; }
+      .metrics { order: 3; width: 100%; overflow: hidden; }
+      .toolbar { flex-wrap: wrap; }
+    }
+
+    @media (max-width: 980px) {
+      .app-shell { height: auto; min-height: 100dvh; grid-template-rows: auto auto; }
+      .metric:nth-child(n+4) { display: none; }
+      .split-view { grid-template-columns: 1fr; grid-template-rows: 62vh 70vh; }
+      .world-panel { border-right: 0; border-bottom: 1px solid var(--line); }
+      .brain-panel { grid-template-rows: minmax(400px, 1fr) 170px; }
+    }
+
+    @media (max-width: 560px) {
+      .system-status { order: 4; width: 100%; }
+      .toolbar { width: 100%; justify-content: flex-start; }
+      .metrics { gap: 10px; }
+      .metric { min-width: 70px; }
+      .split-view { grid-template-rows: 65vh auto; }
+      .brain-panel { grid-template-rows: minmax(450px, 1fr) 340px; }
+      .activity-panel { grid-template-columns: 1fr; grid-template-rows: 170px 170px; }
+      .motor-readout { border-left: 0; border-top: 1px solid var(--line); }
+      .sensors { grid-template-columns: 1fr; }
+      .world-readout { width: 220px; }
+    }
+  </style>
+  <script type="importmap">
+  { "imports": { "three": "./shared/vendor/three/three.module.js" } }
+  </script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <h1>Embodied Fly Lab</h1>
+        <p>FlyWire v783 + NeuroMechFly 2.1</p>
+      </div>
+      <div class="system-status" role="status" aria-live="polite">
+        <span id="status-dot" class="status-dot"></span>
+        <span id="status-text">Initializing</span>
+      </div>
+      <div class="metrics" aria-label="Simulation statistics">
+        <div class="metric"><strong id="metric-neurons">-</strong><span>Neurons</span></div>
+        <div class="metric"><strong id="metric-edges">-</strong><span>Weighted edges</span></div>
+        <div class="metric"><strong id="metric-brain-time">0.00 s</strong><span>Brain time</span></div>
+        <div class="metric"><strong id="metric-ratio">0.00x</strong><span>Physics rate</span></div>
+        <div class="metric"><strong id="metric-compute">- ms</strong><span>15 ms brain step</span></div>
+      </div>
+      <div class="toolbar">
+        <button id="play-button" class="btn primary" type="button">Pause</button>
+        <button id="food-button" class="btn" type="button">Add food</button>
+        <button id="dust-button" class="btn" type="button">Touch</button>
+        <button id="loom-button" class="btn" type="button">Threat</button>
+        <button id="reset-button" class="btn" type="button">Reset</button>
+        <button id="settings-button" class="btn" type="button" aria-expanded="false">Settings</button>
+      </div>
+    </header>
+
+    <main class="split-view">
+      <section class="world-panel" aria-label="Virtual environment and NeuroMechFly body">
+        <div id="world-stage"></div>
+        <div class="panel-heading"><h2>Virtual environment</h2><span class="mode-label">MuJoCo 0.1 ms</span></div>
+        <div class="camera-control" aria-label="Camera mode">
+          <button type="button" data-camera="follow" aria-pressed="true">Follow</button>
+          <button type="button" data-camera="top" aria-pressed="false">Top</button>
+        </div>
+        <div id="settings" class="settings" hidden>
+          <div class="setting">
+            <label for="speed-range"><span>Physics playback</span><output id="speed-value">0.08x</output></label>
+            <input id="speed-range" type="range" min="0.02" max="0.16" step="0.01" value="0.08">
+          </div>
+          <div class="setting">
+            <label for="drive-range"><span>Exploration drive</span><output id="drive-value">55 Hz</output></label>
+            <input id="drive-range" type="range" min="0" max="100" step="5" value="55">
+          </div>
+        </div>
+        <div class="world-readout">
+          <div class="behavior-row"><strong id="behavior-label">Exploring</strong><span id="pose-readout">x 0.0 | y 0.0 | 0 deg</span></div>
+          <div class="sensors">
+            <div class="sensor"><label><span>Food odor</span><output id="odor-value">0%</output></label><div class="meter"><span id="odor-meter"></span></div></div>
+            <div class="sensor"><label><span>Sugar contact</span><output id="sugar-value">0%</output></label><div class="meter"><span id="sugar-meter"></span></div></div>
+            <div class="sensor"><label><span>Touch</span><output id="touch-value">0%</output></label><div class="meter"><span id="touch-meter"></span></div></div>
+          </div>
+        </div>
+        <div id="loading" class="loading">
+          <div class="loading-box">
+            <strong>Preparing the whole brain and body</strong>
+            <p id="loading-message">Reading FlyWire metadata</p>
+            <div class="loading-track"><span></span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="brain-panel" aria-label="Whole-brain connectome activity">
+        <div class="brain-view">
+          <div id="brain-stage"></div>
+          <div class="panel-heading"><h2>Whole-brain activity</h2><span class="mode-label">Whole-graph LIF</span></div>
+          <div class="brain-stats"><strong id="spike-rate">0 spikes/s</strong><span id="active-count">0 active neurons</span><span id="active-focus" class="active-focus">Locating activity</span></div>
+          <div class="brain-mode-control" aria-label="Brain display mode">
+            <button type="button" data-brain-mode="context" aria-pressed="true">Anatomy + activity</button>
+            <button type="button" data-brain-mode="activity" aria-pressed="false">Activity only</button>
+          </div>
+          <div class="legend" aria-label="Neuron class legend">
+            <span><i class="swatch" style="background:#62c48d"></i>Sensory</span>
+            <span><i class="swatch" style="background:#66a7cb"></i>Visual</span>
+            <span><i class="swatch" style="background:#aab3af"></i>Central</span>
+            <span><i class="swatch" style="background:#e8bd57"></i>Descending</span>
+            <span><i class="swatch" style="background:#e1695e"></i>Motor</span>
+            <span><i class="swatch firing" style="background:#ffd65e"></i>Firing</span>
+          </div>
+        </div>
+        <div class="activity-panel">
+          <div class="raster-wrap">
+            <h3>Population firing rate - last 8 seconds</h3>
+            <canvas id="activity-raster" width="640" height="118" aria-label="Firing activity timeline by neuron population"></canvas>
+          </div>
+          <div class="motor-readout">
+            <h3>Descending neuron output</h3>
+            <div class="motor-line"><label><span>Forward</span><output id="motor-forward">0.00</output></label><div class="meter"><span id="motor-forward-meter"></span></div></div>
+            <div class="motor-line"><label><span>Turn</span><output id="motor-turn">0.00</output></label><div class="meter"><span id="motor-turn-meter"></span></div></div>
+            <div class="motor-line"><label><span>Feeding</span><output id="motor-feed">0.00</output></label><div class="meter"><span id="motor-feed-meter"></span></div></div>
+            <div class="motor-line"><label><span>Grooming</span><output id="motor-groom">0.00</output></label><div class="meter"><span id="motor-groom-meter"></span></div></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    if (location.protocol === "file:") {
+      document.body.innerHTML = `
+        <main style="min-height:100vh;display:grid;place-items:center;padding:24px;background:#0d1011;color:#edf2ef;font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+          <div style="max-width:520px">
+            <h1 style="margin:0 0 12px;font-size:24px;font-weight:500">Local server required</h1>
+            <p style="margin:0 0 18px;color:#9ca8a3;line-height:1.6">This simulator cannot load its binary connectome or Web Worker from a file URL. Double-click <code style="color:#e8bd57">start.command</code>, then open the localhost address printed in the terminal.</p>
+            <a href="http://127.0.0.1:50761/" style="color:#111516;background:#edf2ef;padding:9px 12px;border-radius:6px;text-decoration:none">Open running simulator</a>
+          </div>
+        </main>`;
+    } else {
+      const script = document.createElement("script");
+      script.type = "module";
+      script.src = "./app.js";
+      document.body.appendChild(script);
+    }
+  </script>
+</body>
+</html>
