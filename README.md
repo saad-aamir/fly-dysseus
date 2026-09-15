@@ -4,7 +4,7 @@ Embodied Fly Lab connects a NeuroMechFly body in a virtual environment to a whol
 
 ## Live site
 
-The public GitHub Pages URL is added here after deployment.
+[Launch the embodied fly simulation](https://statsleelab.github.io/embodied-fly-lab/)
 
 ## Run locally
 
