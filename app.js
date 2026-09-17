@@ -216,8 +216,14 @@ class BrainRenderer {
     this.activityCore.frustumCulled = false;
     this.root.add(this.activityHalo, this.activityCore);
 
-    this.heat = new Uint8Array(groups.length);
+    // Heat is stored as floats so the per-frame decay below does not lose
+    // precision to integer truncation on its way down to the cull threshold.
+    this.heat = new Float32Array(groups.length);
     this.hot = [];
+    // Brain frames arrive far apart (roughly a second on a laptop), so the
+    // decay is paced against their measured spacing instead of a fixed rate.
+    this.activityInterval = 0.9;
+    this.lastActivityAt = 0;
     this._bindPointerControls();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
@@ -275,6 +281,12 @@ class BrainRenderer {
   }
 
   updateActivity(indices, counts, groupRates, simulatedMs) {
+    const arrivedAt = performance.now() / 1000;
+    if (this.lastActivityAt) {
+      const gap = clamp(arrivedAt - this.lastActivityAt, 0.05, 4);
+      this.activityInterval += 0.3 * (gap - this.activityInterval);
+    }
+    this.lastActivityAt = arrivedAt;
     let eventCount = 0;
     const sideEvents = new Uint32Array(4);
     for (let i = 0; i < indices.length; i++) {
@@ -317,6 +329,7 @@ class BrainRenderer {
   resetActivity() {
     this.heat.fill(0);
     this.hot.length = 0;
+    this.lastActivityAt = 0;
     this.activityGeometry.setDrawRange(0, 0);
     this.rasterContext.fillStyle = "#0d1011";
     this.rasterContext.fillRect(0, 0, this.raster.width, this.raster.height);
@@ -325,12 +338,16 @@ class BrainRenderer {
     byId("active-focus").textContent = "Locating activity";
   }
 
-  render() {
+  render(frameDt = 1 / 60) {
     const hadActivity = this.hot.length > 0;
+    // Decay per unit of wall time, not per rendered frame, so the view looks
+    // the same at 60 and 120 Hz. The time constant tracks the brain frame
+    // spacing so activity never fades to black between two frames.
+    const decay = Math.exp(-clamp(frameDt, 0, 0.1) / Math.max(0.25, this.activityInterval * 1.15));
     let write = 0;
     for (let i = 0; i < this.hot.length; i++) {
       const index = this.hot[i];
-      const heat = this.heat[index] * 0.92;
+      const heat = this.heat[index] * decay;
       this.heat[index] = heat;
       if (heat < 3) {
         this.heat[index] = 0;
@@ -888,7 +905,7 @@ class EmbodiedFlyLab {
       this.requestBrainStep();
     }
     this.world.render(wallDt);
-    this.brain.render();
+    this.brain.render(wallDt);
     this.updateWorldHud();
     this.statsMeter(now, physicsSteps);
   }
