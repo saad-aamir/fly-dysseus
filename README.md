@@ -59,6 +59,7 @@ This research prototype genuinely integrates the full listed connectivity graph,
 ## Verification
 
 ```bash
+node tests/brain-activity-timing.test.mjs
 node tests/brain-core.test.mjs
 node tests/locomotion-controller.test.mjs
 python3 tools/verify_assets.py
