@@ -12,6 +12,7 @@ import {
   groundEscapeCommand,
   mixDescendingCommands,
 } from "./locomotion-controller.mjs";
+import { BrainActivityTiming } from "./brain-activity-timing.mjs";
 
 const DATA_URL = new URL("./data/", import.meta.url);
 const ASSETS_URL = "./assets";
@@ -216,8 +217,13 @@ class BrainRenderer {
     this.activityCore.frustumCulled = false;
     this.root.add(this.activityHalo, this.activityCore);
 
-    this.heat = new Uint8Array(groups.length);
+    // Heat is stored as floats so the incremental decay below does not lose
+    // precision to integer truncation on its way down to the cull threshold.
+    this.heat = new Float32Array(groups.length);
     this.hot = [];
+    // Brain frames arrive far apart (roughly a second on a laptop), so the
+    // decay is paced against their measured spacing instead of a fixed rate.
+    this.activityTiming = new BrainActivityTiming(performance.now() / 1000);
     this._bindPointerControls();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
@@ -274,7 +280,34 @@ class BrainRenderer {
     this.camera.updateProjectionMatrix();
   }
 
+  _decayActivityTo(nowSeconds) {
+    const elapsed = this.activityTiming.advanceTo(nowSeconds);
+    if (elapsed === 0 || this.hot.length === 0) return;
+    const decay = this.activityTiming.decayFactor(elapsed);
+    let write = 0;
+    for (let i = 0; i < this.hot.length; i++) {
+      const index = this.hot[i];
+      const heat = this.heat[index] * decay;
+      this.heat[index] = heat;
+      if (heat < 3) {
+        this.heat[index] = 0;
+        continue;
+      }
+      this.hot[write++] = index;
+    }
+    this.hot.length = write;
+  }
+
+  setActivityTimingActive(active) {
+    this.activityTiming.setCadenceActive(active);
+  }
+
   updateActivity(indices, counts, groupRates, simulatedMs) {
+    const arrivedAt = performance.now() / 1000;
+    // Decay existing heat up to the arrival time before adding the new frame,
+    // so a long render stall cannot be charged against newly arrived spikes.
+    this._decayActivityTo(arrivedAt);
+    this.activityTiming.observeActivity(arrivedAt);
     let eventCount = 0;
     const sideEvents = new Uint32Array(4);
     for (let i = 0; i < indices.length; i++) {
@@ -317,6 +350,7 @@ class BrainRenderer {
   resetActivity() {
     this.heat.fill(0);
     this.hot.length = 0;
+    this.activityTiming.reset(performance.now() / 1000);
     this.activityGeometry.setDrawRange(0, 0);
     this.rasterContext.fillStyle = "#0d1011";
     this.rasterContext.fillRect(0, 0, this.raster.width, this.raster.height);
@@ -325,17 +359,16 @@ class BrainRenderer {
     byId("active-focus").textContent = "Locating activity";
   }
 
-  render() {
+  render(nowSeconds = performance.now() / 1000) {
     const hadActivity = this.hot.length > 0;
+    // The activity clock uses uncapped wall time. Existing heat is also
+    // advanced when a worker frame arrives, so fresh spikes are only decayed
+    // for the time they have actually been on screen.
+    this._decayActivityTo(nowSeconds);
     let write = 0;
     for (let i = 0; i < this.hot.length; i++) {
       const index = this.hot[i];
-      const heat = this.heat[index] * 0.92;
-      this.heat[index] = heat;
-      if (heat < 3) {
-        this.heat[index] = 0;
-        continue;
-      }
+      const heat = this.heat[index];
       const sourceOffset = index * 3;
       const activityOffset = write * 3;
       this.activityPositions[activityOffset] = this.positions[sourceOffset];
@@ -612,6 +645,7 @@ class EmbodiedFlyLab {
     this.playbackSpeed = 0.08;
     this.driveHz = 55;
     this.running = true;
+    this.brain.setActivityTimingActive(!document.hidden);
     this.motor = { forward: 0, reverse: 0, turn: 0, feed: 0, groom: 0, escape: 0 };
     this.sensors = {};
     this.hunger = 0.72;
@@ -632,12 +666,16 @@ class EmbodiedFlyLab {
     this.nearestFood = null;
     this.resetBody();
     this.bindControls();
+    document.addEventListener("visibilitychange", () => {
+      this.brain.setActivityTimingActive(this.running && !document.hidden);
+    });
     brainConnection.onFrame((frame) => this.onBrainFrame(frame));
   }
 
   bindControls() {
     byId("play-button").addEventListener("click", () => {
       this.running = !this.running;
+      this.brain.setActivityTimingActive(this.running && !document.hidden);
       byId("play-button").textContent = this.running ? "Pause" : "Resume";
     });
     byId("food-button").addEventListener("click", () => this.world.addFoodAhead());
@@ -877,18 +915,21 @@ class EmbodiedFlyLab {
   frame(nowMs) {
     requestAnimationFrame((time) => this.frame(time));
     const now = nowMs / 1000;
-    const wallDt = this.lastWallTime === undefined ? 0 : Math.min(now - this.lastWallTime, 0.1);
+    const elapsedWallTime = this.lastWallTime === undefined
+      ? 0
+      : Math.max(0, now - this.lastWallTime);
+    const frameDt = Math.min(elapsedWallTime, 0.1);
     this.lastWallTime = now;
     let physicsSteps = 0;
     if (this.running) {
-      physicsSteps = this.physicsStepper.advance(wallDt * this.playbackSpeed, () => this.physicsStep());
+      physicsSteps = this.physicsStepper.advance(frameDt * this.playbackSpeed, () => this.physicsStep());
       const simulatedSeconds = physicsSteps * this.bodyMeta.timestep;
       this.brainAccumulatorMs += simulatedSeconds * 1000;
       this.updateInternalState(simulatedSeconds);
       this.requestBrainStep();
     }
-    this.world.render(wallDt);
-    this.brain.render();
+    this.world.render(frameDt);
+    this.brain.render(now);
     this.updateWorldHud();
     this.statsMeter(now, physicsSteps);
   }
