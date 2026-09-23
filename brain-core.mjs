@@ -14,6 +14,9 @@ const STIMULUS_POPULATIONS = {
   odorRightHz: "food_odor_right",
   sugarLeftHz: "sugar_left",
   sugarRightHz: "sugar_right",
+  // Shiu et al.'s reference sugar neurons, so the fly lab and the
+  // published model receive the identical taste input.
+  sugarReferenceHz: "sugar_shiu_reference",
   touchHz: "antennal_mechanosensory",
   loomHz: "looming_visual_proxy",
   hungerHz: "walk_dnp09",
@@ -73,6 +76,8 @@ export class BrainEngine {
     this.intervalTouched = [];
     this.smoothedReadouts = new Float64Array(READOUT_NAMES.length);
     this.smoothedGroups = new Float64Array(manifest.group_names.length);
+    // neuron index -> its original outgoing weights, so silencing can be undone
+    this.silencedEdges = new Map();
     this.reset();
   }
 
@@ -90,6 +95,33 @@ export class BrainEngine {
     this.timeMs = 0;
     this.totalSpikes = 0;
     this.randomState = seed >>> 0;
+  }
+
+  // Tetanus-style silencing, the same cut as silence() in Shiu et al.'s
+  // model.py: a silenced neuron can still fire, but every synapse FROM it
+  // carries nothing. The graph is stored per sender, so a neuron's outgoing
+  // synapses are the contiguous block offsets[i] .. offsets[i + 1].
+  //
+  // Pass the full list of populations that should be silenced right now.
+  // Anything silenced before is restored first, so this works as a toggle.
+  setSilenced(populationNames = []) {
+    for (const [index, original] of this.silencedEdges) {
+      this.weights.set(original, this.offsets[index]);
+    }
+    this.silencedEdges.clear();
+
+    for (const name of populationNames) {
+      const indices = this.manifest.populations[name];
+      if (!indices) throw new Error(`unknown population ${name}`);
+      for (const index of indices) {
+        if (this.silencedEdges.has(index)) continue;
+        const start = this.offsets[index];
+        const end = this.offsets[index + 1];
+        this.silencedEdges.set(index, this.weights.slice(start, end));
+        this.weights.fill(0, start, end);
+      }
+    }
+    return this.silencedEdges.size;
   }
 
   random() {

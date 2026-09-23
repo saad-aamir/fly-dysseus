@@ -52,6 +52,12 @@ self.onmessage = async ({ data }) => {
       self.postMessage({ type: "reset-complete" });
       return;
     }
+    if (data.type === "silence") {
+      const populations = data.populations || [];
+      const count = engine.setSilenced(populations);
+      self.postMessage({ type: "silence-complete", populations, count });
+      return;
+    }
     if (data.type === "step") {
       const result = engine.step(data.durationMs, data.stimuli);
       self.postMessage(

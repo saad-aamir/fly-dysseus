@@ -17,6 +17,28 @@ import { BrainActivityTiming } from "./brain-activity-timing.mjs";
 const DATA_URL = new URL("./data/", import.meta.url);
 const ASSETS_URL = "./assets";
 const LOOM_STIMULUS_DURATION_SECONDS = 0.55;
+// Which sugar input the fly receives on contact. Wax always silences
+// exactly the neurons being stimulated, whichever input is chosen.
+//   "lab":  the Embodied Fly Lab's original interface, 122 sugar neurons at 200 Hz
+//   "shiu": Shiu et al.'s 20 reference sugar neurons at 100 Hz (too weak to
+//           trigger feeding in the busy embodied brain in our tests)
+const SUGAR_INPUT = "lab";
+const SUGAR_INPUTS = {
+  lab: {
+    rates: { sugarLeftHz: 200, sugarRightHz: 200 },
+    populations: ["sugar_left", "sugar_right"],
+  },
+  shiu: {
+    rates: { sugarReferenceHz: 100 },
+    populations: ["sugar_shiu_reference"],
+  },
+};
+const WAX_POPULATIONS = SUGAR_INPUTS[SUGAR_INPUT].populations;
+const ACT_LABELS = { wax: "Wax", mast: "Mast" };
+const ACT_HINTS = {
+  wax: "Silence the sugar neurons' outgoing synapses inside the brain",
+  mast: "MN9 keeps firing, but its command never reaches the body",
+};
 const number = new Intl.NumberFormat("en-US");
 const byId = (id) => document.getElementById(id);
 const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
@@ -91,6 +113,7 @@ function startBrainWorker() {
       else if (data.type === "ready") resolve(data);
       else if (data.type === "frame") frameHandler(data);
       else if (data.type === "reset-complete") frameHandler(data);
+      else if (data.type === "silence-complete") frameHandler(data);
       else if (data.type === "error") {
         const error = new Error(data.message);
         error.stack = data.stack || error.stack;
@@ -650,6 +673,8 @@ class EmbodiedFlyLab {
     this.sensors = {};
     this.hunger = 0.72;
     this.dust = 0.08;
+    this.acts = { wax: false, mast: false };
+    this.actButtons = {};
     this.loomTimer = 0;
     this.escapeTimer = 0;
     this.escapeArmed = false;
@@ -703,6 +728,37 @@ class EmbodiedFlyLab {
         });
       });
     });
+
+    // Wax and Mast buttons, cloned from the Threat button so they match its style.
+    const anchor = byId("loom-button");
+    for (const name of Object.keys(ACT_LABELS)) {
+      const button = anchor.cloneNode(false);
+      button.id = `${name}-button`;
+      button.removeAttribute("aria-label");
+      button.title = ACT_HINTS[name];
+      button.setAttribute("aria-pressed", "false");
+      button.textContent = `${ACT_LABELS[name]}: off`;
+      button.addEventListener("click", () => this.setAct(name, !this.acts[name]));
+      anchor.parentElement.appendChild(button);
+      this.actButtons[name] = button;
+    }
+  }
+
+  setAct(name, on) {
+    this.acts[name] = on;
+    const button = this.actButtons[name];
+    button.setAttribute("aria-pressed", String(on));
+    button.textContent = `${ACT_LABELS[name]}: ${on ? "on" : "off"}`;
+    if (name === "wax") {
+      // Wax is a cut inside the brain: the worker zeroes the sugar
+      // neurons' outgoing synapses (or restores them when switched off).
+      this.brainConnection.worker.postMessage({
+        type: "silence",
+        populations: on ? WAX_POPULATIONS : [],
+      });
+    }
+    // Mast changes nothing in the brain. MN9 keeps firing; physicsStep and
+    // updateInternalState simply stop the body from acting on it.
   }
 
   triggerThreat() {
@@ -774,8 +830,10 @@ class EmbodiedFlyLab {
       contact,
       odorLeftHz: left * 145,
       odorRightHz: right * 145,
-      sugarLeftHz: contact ? 200 : 0,
-      sugarRightHz: contact ? 200 : 0,
+      sugarLeftHz: 0,
+      sugarRightHz: 0,
+      sugarReferenceHz: 0,
+      ...(contact ? SUGAR_INPUTS[SUGAR_INPUT].rates : {}),
       touchHz: this.dust * 150,
       loomHz: this.loomTimer > 0 ? 220 : 0,
       hungerHz: this.driveHz * this.hunger,
@@ -789,7 +847,8 @@ class EmbodiedFlyLab {
     this.escapeTimer = Math.max(0, this.escapeTimer - dt);
     if (this.loomTimer === 0 && this.escapeTimer === 0) this.escapeArmed = false;
     this.world.updateLoom(this.loomTimer);
-    if (this.sensors.contact && this.motor.feed > 0.18 && this.nearestFood) {
+    // Mast: the feeding command never reaches the mouth, so nothing is eaten.
+    if (!this.acts.mast && this.sensors.contact && this.motor.feed > 0.18 && this.nearestFood) {
       this.hunger = clamp(this.hunger - dt * 0.24, 0, 1);
       this.nearestFood.food.energy = Math.max(0, this.nearestFood.food.energy - dt * 0.12);
       this.nearestFood.food.mesh.scale.setScalar(0.35 + this.nearestFood.food.energy * 0.65);
@@ -806,7 +865,8 @@ class EmbodiedFlyLab {
       : null;
     this.escapePhase = escapeCommand?.phase || "idle";
 
-    if (!escapeCommand && this.sensors.contact && this.motor.feed > 0.18) {
+    // Mast: MN9 still fires, but the body is bound and doesn't stop to feed.
+    if (!escapeCommand && !this.acts.mast && this.sensors.contact && this.motor.feed > 0.18) {
       base = 0;
       turn = 0;
     }
@@ -858,6 +918,13 @@ class EmbodiedFlyLab {
       this.brainBusy = false;
       return;
     }
+    if (frame.type === "silence-complete") {
+      setStatus(
+        frame.count ? `Wax on: ${frame.count} sugar neurons silenced` : "Wax off: brain intact",
+        "ready",
+      );
+      return;
+    }
     if (frame.requestId <= this.ignoreFramesThrough) return;
     this.brainBusy = false;
     this.motor = frame.motor;
@@ -901,6 +968,8 @@ class EmbodiedFlyLab {
       behavior = `Ground escape: ${phaseLabels[this.escapePhase] || "sprint"}`;
     } else if (this.loomTimer > 0.1) behavior = "Threat detected";
     else if (this.motor.groom > 0.22 && this.dust > 0.25) behavior = "Antennal grooming";
+    else if (sugar && this.acts.wax) behavior = "Wax: touching sugar, taste neurons silenced";
+    else if (sugar && this.acts.mast && this.motor.feed > 0.18) behavior = "Mast: feeding command sent, body bound";
     else if (sugar && this.motor.feed > 0.18) behavior = "Feeding";
     else if (this.motor.forward > 0.08) behavior = "Food seeking";
     byId("behavior-label").textContent = behavior;
