@@ -154,6 +154,7 @@ class BrainRenderer {
 
     this.root = new THREE.Group();
     this.root.rotation.x = -0.14;
+    this.root.scale.y = -1;
     this.scene.add(this.root);
     this.baseColors = new Float32Array(positions.length);
     for (let i = 0; i < groups.length; i++) {
