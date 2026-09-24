@@ -99,7 +99,12 @@ async function loadBrainVisualData() {
     fetchArray(manifest.arrays.sides),
     fetchArray(manifest.arrays.display_edges),
   ]);
-  return { manifest, positions, groups, sides, displayEdges };
+  // Optional: the Siren circuit exported from the Shiu-model notebook.
+  // If the file is missing, the Siren view simply doesn't appear.
+  let siren = null;
+  const sirenResponse = await fetch(new URL("siren-circuit.json", DATA_URL));
+  if (sirenResponse.ok) siren = await sirenResponse.json();
+  return { manifest, positions, groups, sides, displayEdges, siren };
 }
 
 function startBrainWorker() {
@@ -133,7 +138,7 @@ function startBrainWorker() {
 }
 
 class BrainRenderer {
-  constructor(container, positions, groups, sides, displayEdges, manifest) {
+  constructor(container, positions, groups, sides, displayEdges, manifest, siren = null) {
     this.container = container;
     this.positions = positions;
     this.groups = groups;
@@ -255,15 +260,80 @@ class BrainRenderer {
     this.raster = byId("activity-raster");
     this.rasterContext = this.raster.getContext("2d");
     this.rasterContext.imageSmoothingEnabled = false;
+
+    // Siren circuit view: show only the neurons the Shiu model says respond to sugar.
+    this.sirenMode = false;
+    this.siren = siren ? this._buildSiren(siren, glowTexture) : null;
+    const activityButton = document.querySelector('[data-brain-mode="activity"]');
+    if (this.siren && activityButton) {
+      const sirenButton = activityButton.cloneNode(false);
+      sirenButton.removeAttribute("id");
+      sirenButton.dataset.brainMode = "siren";
+      sirenButton.textContent = "Siren circuit";
+      sirenButton.setAttribute("aria-pressed", "false");
+      activityButton.parentElement.appendChild(sirenButton);
+    }
+
     document.querySelectorAll("[data-brain-mode]").forEach((button) => {
       button.addEventListener("click", () => this.setDisplayMode(button.dataset.brainMode));
     });
   }
 
+  _buildSiren(siren, glowTexture) {
+    // kind per neuron: 0 = not in circuit, 1 = sugar input, 2 = core circuit, 3 = MN9
+    const kind = new Uint8Array(this.groups.length);
+    for (const key of Object.keys(siren.core || {})) kind[Number(key)] = 2;
+    for (const index of siren.inputs || []) kind[index] = 1;
+    for (const index of siren.mn9 || []) kind[index] = 3;
+    const members = [];
+    let coreTotal = 0;
+    for (let i = 0; i < kind.length; i++) {
+      if (!kind[i]) continue;
+      members.push(i);
+      if (kind[i] === 2) coreTotal++;
+    }
+    const positionsOf = (indices) => {
+      const out = new Float32Array(indices.length * 3);
+      indices.forEach((index, i) => out.set(this.positions.subarray(index * 3, index * 3 + 3), i * 3));
+      return out;
+    };
+
+    // Faint outline of the whole circuit, so a silent circuit is visibly silent, not missing.
+    const outlineGeometry = new THREE.BufferGeometry();
+    outlineGeometry.setAttribute("position", new THREE.BufferAttribute(positionsOf(members), 3));
+    const outline = new THREE.Points(outlineGeometry, new THREE.PointsMaterial({
+      size: 0.09, color: 0x9a8f7a, transparent: true, opacity: 0.35, depthWrite: false, sizeAttenuation: true,
+    }));
+
+    // MN9 beacon: a large red glow that lights only while MN9 is firing.
+    const mn9 = siren.mn9 || [];
+    const beaconColors = new Float32Array(mn9.length * 3);
+    const beaconColorAttribute = new THREE.BufferAttribute(beaconColors, 3);
+    beaconColorAttribute.setUsage(THREE.DynamicDrawUsage);
+    const beaconGeometry = new THREE.BufferGeometry();
+    beaconGeometry.setAttribute("position", new THREE.BufferAttribute(positionsOf(mn9), 3));
+    beaconGeometry.setAttribute("color", beaconColorAttribute);
+    const beacon = new THREE.Points(beaconGeometry, new THREE.PointsMaterial({
+      size: 2.2, map: glowTexture, vertexColors: true, transparent: true, opacity: 1,
+      blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, sizeAttenuation: true,
+    }));
+
+    outline.visible = false;
+    beacon.visible = false;
+    beacon.frustumCulled = false;
+    this.root.add(outline, beacon);
+    return { kind, coreTotal, mn9, outline, beacon, beaconColors, beaconColorAttribute };
+  }
+
   setDisplayMode(mode) {
-    const activityOnly = mode === "activity";
+    const activityOnly = mode === "activity" || mode === "siren";
     this.points.material.opacity = activityOnly ? 0.045 : 0.38;
     this.lines.material.opacity = activityOnly ? 0 : 0.018;
+    this.sirenMode = mode === "siren" && Boolean(this.siren);
+    if (this.siren) {
+      this.siren.outline.visible = this.sirenMode;
+      this.siren.beacon.visible = this.sirenMode;
+    }
     document.querySelectorAll("[data-brain-mode]").forEach((button) => {
       button.setAttribute("aria-pressed", String(button.dataset.brainMode === mode));
     });
@@ -350,6 +420,18 @@ class BrainRenderer {
     const right = sideEvents[2];
     const sideLabel = left > right * 1.18 ? "left" : right > left * 1.18 ? "right" : "bilateral";
     byId("active-focus").textContent = `${sideLabel} | ${GROUP_LABELS[leadingGroup]} dominant`;
+    if (this.sirenMode) {
+      // Count circuit neurons currently glowing, i.e. exactly what's on screen.
+      let lit = 0;
+      let mn9Lit = false;
+      for (const index of this.hot) {
+        const k = this.siren.kind[index];
+        if (k === 2) lit++;
+        else if (k === 3) mn9Lit = true;
+      }
+      byId("active-focus").textContent =
+        `Siren circuit: ${lit} of ${this.siren.coreTotal} lit | MN9 ${mn9Lit ? "firing" : "silent"}`;
+    }
     this.drawRaster(groupRates);
   }
 
@@ -380,6 +462,10 @@ class BrainRenderer {
     byId("spike-rate").textContent = "0 spikes/s";
     byId("active-count").textContent = "0 active neurons";
     byId("active-focus").textContent = "Locating activity";
+    if (this.siren) {
+      this.siren.beaconColors.fill(0);
+      this.siren.beaconColorAttribute.needsUpdate = true;
+    }
   }
 
   render(nowSeconds = performance.now() / 1000) {
@@ -388,23 +474,42 @@ class BrainRenderer {
     // advanced when a worker frame arrives, so fresh spikes are only decayed
     // for the time they have actually been on screen.
     this._decayActivityTo(nowSeconds);
-    let write = 0;
+    // In Siren mode, only circuit neurons are drawn: sugar inputs green,
+    // core circuit gold, MN9 red. Other modes draw every active neuron gold.
+    const kind = this.sirenMode ? this.siren.kind : null;
+    let draw = 0;
     for (let i = 0; i < this.hot.length; i++) {
       const index = this.hot[i];
+      const k = kind ? kind[index] : 2;
+      if (k === 0) continue;
       const heat = this.heat[index];
       const sourceOffset = index * 3;
-      const activityOffset = write * 3;
+      const activityOffset = draw * 3;
       this.activityPositions[activityOffset] = this.positions[sourceOffset];
       this.activityPositions[activityOffset + 1] = this.positions[sourceOffset + 1];
       this.activityPositions[activityOffset + 2] = this.positions[sourceOffset + 2];
       const intensity = clamp(heat / 190, 0, 1);
-      this.activityColors[activityOffset] = 1;
-      this.activityColors[activityOffset + 1] = 0.2 + intensity * 0.72;
-      this.activityColors[activityOffset + 2] = 0.035;
-      this.hot[write++] = index;
+      let r = 1;
+      let g = 0.2 + intensity * 0.72;
+      let b = 0.035;
+      if (k === 1) { r = 0.3; g = 0.55 + intensity * 0.4; b = 0.42; }
+      else if (k === 3) { r = 1; g = 0.25; b = 0.3; }
+      this.activityColors[activityOffset] = r;
+      this.activityColors[activityOffset + 1] = g;
+      this.activityColors[activityOffset + 2] = b;
+      draw++;
     }
-    this.hot.length = write;
-    this.activityGeometry.setDrawRange(0, write);
+    this.activityGeometry.setDrawRange(0, draw);
+    if (this.sirenMode) {
+      const { mn9, beaconColors, beaconColorAttribute } = this.siren;
+      mn9.forEach((index, i) => {
+        const glow = clamp(this.heat[index] / 150, 0, 1);
+        beaconColors[i * 3] = glow;
+        beaconColors[i * 3 + 1] = glow * 0.22;
+        beaconColors[i * 3 + 2] = glow * 0.25;
+      });
+      beaconColorAttribute.needsUpdate = true;
+    }
     if (hadActivity) {
       this.activityPositionAttribute.needsUpdate = true;
       this.activityColorAttribute.needsUpdate = true;
@@ -659,6 +764,7 @@ class EmbodiedFlyLab {
       brainData.sides,
       brainData.displayEdges,
       brainData.manifest,
+      brainData.siren,
     );
     this.controller = new LocomotionController(body.meta);
     this.physicsStepper = makeStepper(body.meta.timestep, 90);
