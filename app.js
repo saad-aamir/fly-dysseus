@@ -154,7 +154,7 @@ class BrainRenderer {
 
     this.root = new THREE.Group();
     this.root.rotation.x = -0.14;
-    this.root.scale.y = -1;
+    this.root.scale.y = -1;   // FlyWire's y points down; flip so the top of the brain is up
     this.scene.add(this.root);
     this.baseColors = new Float32Array(positions.length);
     for (let i = 0; i < groups.length; i++) {
@@ -265,6 +265,7 @@ class BrainRenderer {
     // Siren circuit view: show only the neurons the Shiu model says respond to sugar.
     this.sirenMode = false;
     this.siren = siren ? this._buildSiren(siren, glowTexture) : null;
+    if (this.siren) this.sirenHud = this._buildSirenHud();
     const activityButton = document.querySelector('[data-brain-mode="activity"]');
     if (this.siren && activityButton) {
       const sirenButton = activityButton.cloneNode(false);
@@ -326,6 +327,57 @@ class BrainRenderer {
     return { kind, coreTotal, mn9, outline, beacon, beaconColors, beaconColorAttribute };
   }
 
+  // Large on-screen readout for Siren mode, readable in a phone-sized video.
+  _buildSirenHud() {
+    if (!document.getElementById("siren-hud-style")) {
+      const style = document.createElement("style");
+      style.id = "siren-hud-style";
+      style.textContent = `
+        .siren-hud {
+          position: absolute; top: 16px; left: 16px; z-index: 5;
+          display: none; min-width: 230px; padding: 14px 18px 16px;
+          background: rgba(12, 15, 16, 0.78); border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 12px; font-variant-numeric: tabular-nums; pointer-events: none;
+        }
+        .siren-hud-count { font-size: 56px; font-weight: 700; line-height: 1; color: #f2c14e; }
+        .siren-hud-total { font-size: 26px; font-weight: 500; color: rgba(255, 255, 255, 0.55); }
+        .siren-hud-label { margin-top: 6px; font-size: 16px; color: rgba(255, 255, 255, 0.72); }
+        .siren-hud-bar { margin-top: 10px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+        .siren-hud-bar > div { height: 100%; width: 0%; background: #f2c14e; transition: width 0.25s ease-out; }
+        .siren-hud-mn9 {
+          margin-top: 14px; display: inline-block; padding: 7px 14px; border-radius: 999px;
+          font-size: 24px; font-weight: 700; color: rgba(255, 255, 255, 0.6);
+          background: rgba(255, 255, 255, 0.08); transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+        }
+        .siren-hud-mn9.firing { color: #fff; background: #d9474f; box-shadow: 0 0 22px rgba(255, 70, 80, 0.7); }
+      `;
+      document.head.appendChild(style);
+    }
+    if (getComputedStyle(this.container).position === "static") this.container.style.position = "relative";
+    const hud = document.createElement("div");
+    hud.className = "siren-hud";
+    hud.innerHTML = `
+      <div class="siren-hud-count"><span data-lit>0</span><span class="siren-hud-total"> / ${this.siren.coreTotal}</span></div>
+      <div class="siren-hud-label">Siren circuit neurons lit</div>
+      <div class="siren-hud-bar"><div data-bar></div></div>
+      <div class="siren-hud-mn9" data-mn9>MN9 silent</div>`;
+    this.container.appendChild(hud);
+    return {
+      root: hud,
+      lit: hud.querySelector("[data-lit]"),
+      bar: hud.querySelector("[data-bar]"),
+      mn9: hud.querySelector("[data-mn9]"),
+    };
+  }
+
+  _updateSirenHud(lit, mn9Lit) {
+    if (!this.sirenHud) return;
+    this.sirenHud.lit.textContent = String(lit);
+    this.sirenHud.bar.style.width = `${(100 * lit) / Math.max(1, this.siren.coreTotal)}%`;
+    this.sirenHud.mn9.textContent = mn9Lit ? "MN9 firing" : "MN9 silent";
+    this.sirenHud.mn9.classList.toggle("firing", mn9Lit);
+  }
+
   setDisplayMode(mode) {
     const activityOnly = mode === "activity" || mode === "siren";
     this.points.material.opacity = activityOnly ? 0.045 : 0.38;
@@ -334,6 +386,7 @@ class BrainRenderer {
     if (this.siren) {
       this.siren.outline.visible = this.sirenMode;
       this.siren.beacon.visible = this.sirenMode;
+      this.sirenHud.root.style.display = this.sirenMode ? "block" : "none";
     }
     document.querySelectorAll("[data-brain-mode]").forEach((button) => {
       button.setAttribute("aria-pressed", String(button.dataset.brainMode === mode));
@@ -432,6 +485,7 @@ class BrainRenderer {
       }
       byId("active-focus").textContent =
         `Siren circuit: ${lit} of ${this.siren.coreTotal} lit | MN9 ${mn9Lit ? "firing" : "silent"}`;
+      this._updateSirenHud(lit, mn9Lit);
     }
     this.drawRaster(groupRates);
   }
@@ -466,6 +520,7 @@ class BrainRenderer {
     if (this.siren) {
       this.siren.beaconColors.fill(0);
       this.siren.beaconColorAttribute.needsUpdate = true;
+      this._updateSirenHud(0, false);
     }
   }
 
