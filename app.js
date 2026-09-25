@@ -827,8 +827,8 @@ class EmbodiedFlyLab {
     this.statsMeter = makeStatsMeter(body.meta.timestep, ({ rtf }) => {
       byId("metric-ratio").textContent = `${rtf.toFixed(2)}x`;
     });
-    this.playbackSpeed = 0.08;
-    this.driveHz = 55;
+    this.playbackSpeed = 0.16;
+    this.driveHz = 30;
     this.running = true;
     this.brain.setActivityTimingActive(!document.hidden);
     this.motor = { forward: 0, reverse: 0, turn: 0, feed: 0, groom: 0, escape: 0 };
@@ -874,10 +874,14 @@ class EmbodiedFlyLab {
       panel.hidden = !panel.hidden;
       byId("settings-button").setAttribute("aria-expanded", String(!panel.hidden));
     });
+    byId("speed-range").value = String(this.playbackSpeed);
+    byId("speed-value").textContent = `${this.playbackSpeed.toFixed(2)}x`;
     byId("speed-range").addEventListener("input", (event) => {
       this.playbackSpeed = Number(event.target.value);
       byId("speed-value").textContent = `${this.playbackSpeed.toFixed(2)}x`;
     });
+    byId("drive-range").value = String(this.driveHz);
+    byId("drive-value").textContent = `${this.driveHz.toFixed(0)} Hz`;
     byId("drive-range").addEventListener("input", (event) => {
       this.driveHz = Number(event.target.value);
       byId("drive-value").textContent = `${this.driveHz.toFixed(0)} Hz`;
@@ -1153,7 +1157,10 @@ class EmbodiedFlyLab {
     this.lastWallTime = now;
     let physicsSteps = 0;
     if (this.running) {
-      physicsSteps = this.physicsStepper.advance(frameDt * this.playbackSpeed, () => this.physicsStep());
+      const brainCaughtUp = this.brainAccumulatorMs < 60;
+      physicsSteps = brainCaughtUp
+        ? this.physicsStepper.advance(frameDt * this.playbackSpeed, () => this.physicsStep())
+        : 0;
       const simulatedSeconds = physicsSteps * this.bodyMeta.timestep;
       this.brainAccumulatorMs += simulatedSeconds * 1000;
       this.updateInternalState(simulatedSeconds);
