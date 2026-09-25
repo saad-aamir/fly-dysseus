@@ -5,13 +5,11 @@
 
 A whole-brain model of *Drosophila*, wired from the FlyWire connectome (138,639 neurons), drives a physics-simulated fly body. The Sirens are sugar. The fly gets three versions of the myth: the song, wax in the ears, and tied to the mast.
 
-
-https://github.com/user-attachments/assets/07f639dc-c14c-4495-9b94-9e496630e632
+https://github.com/user-attachments/assets/80b0172d-89d5-4da4-aef2-ffc97d05032e
 
 https://github.com/user-attachments/assets/e212a830-f84c-4478-87bb-349684ce5d80
 
-https://github.com/user-attachments/assets/80b0172d-89d5-4da4-aef2-ffc97d05032e
-
+https://github.com/user-attachments/assets/07f639dc-c14c-4495-9b94-9e496630e632
 
 **Try it live:** [[live demo link]](https://saad-aamir.github.io/fly-dysseus/)
 
