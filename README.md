@@ -6,7 +6,7 @@ A whole-brain model of *Drosophila*, wired from the FlyWire connectome (138,639 
 
 [Video: drop the final cut here]
 
-**Try it live:** [live demo link]
+**Try it live:** [[live demo link]](https://saad-aamir.github.io/fly-dysseus/)
 
 ---
 
