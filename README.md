@@ -14,7 +14,7 @@ https://github.com/user-attachments/assets/e212a830-f84c-4478-87bb-349684ce5d80
 **Act 3: Tied to the mast**
 https://github.com/user-attachments/assets/07f639dc-c14c-4495-9b94-9e496630e632
 
-**Try it live:** [[live demo link]](https://saad-aamir.github.io/fly-dysseus/)
+**Try it live:** [saad-aamir.github.io/fly-dysseus](https://saad-aamir.github.io/fly-dysseus/)
 
 ---
 
