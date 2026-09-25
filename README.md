@@ -65,6 +65,8 @@ Wax silences the circuit. Mast leaves it untouched: the brain still "wants" the 
   - A **Siren circuit** brain view that shows only the circuit neurons (sugar inputs green, circuit gold, MN9 red), with a large live readout: neurons lit, and whether MN9 is firing.
   - Flipped the brain display's vertical axis, so ventral structures sit at the bottom. MN9 now appears in the gnathal ganglion, matching its position in FlyWire Codex.
 - **`data/siren-circuit.json`**: the circuit exported from the proof notebook.
+- Lowered the default exploration drive from 55 Hz to 30 Hz. At 55, the injected urge to walk often carries the fly past the sugar before the feeding circuit can stop it.
+- Physics now waits whenever the brain simulation falls behind, so on slower machines the fly never acts on stale commands. Default playback raised to 0.16x.
 
 ---
 
